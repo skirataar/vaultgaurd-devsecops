@@ -2,16 +2,19 @@
   "name": "vaultguard-devsecops",
   "version": "1.0.0",
   "description": "VaultGuard DevSecOps - Secure Architecture, Injection & SSRF Controls Microservice",
-  "main": "dist/server.js",
+  "main": "dist/src/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node dist/src/server.js",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
     "prisma:seed": "tsx prisma/seed.ts",
     "db:setup": "prisma db push && tsx prisma/seed.ts",
-    "test:controls": "tsx tests/verify-controls.ts"
+    "test:controls": "tsx tests/verify-controls.ts",
+    "scan:sast": "semgrep scan --config .semgrep/vaultguard-rules.yml src/ --jobs 1",
+    "scan:trivy": "trivy config --config trivy.yaml .",
+    "scan:all": "bash scripts/run-security-scans.sh"
   },
   "dependencies": {
     "@prisma/client": "^6.4.1",

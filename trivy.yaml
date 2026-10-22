@@ -1,0 +1,27 @@
+# ==============================================================================
+# Trivy Security Configuration (Phase 5: Container & Filesystem Hardening)
+# ==============================================================================
+format: table
+exit-code: 0
+
+severity:
+  - CRITICAL
+  - HIGH
+  - MEDIUM
+  - LOW
+
+scan:
+  scanners:
+    - vuln
+    - misconfig
+    - secret
+  skip-dirs:
+    - node_modules
+    - dist
+    - .git
+    - .semgrep
+    - tests
+
+misconfiguration:
+  scanners:
+    - dockerfile

@@ -1,0 +1,34 @@
+# ==============================================================================
+# ANTI-PATTERN DEMO: Deliberately Insecure Container Image (Vulnerable)
+# Used for DevSecOps Trivy Misconfiguration & Vulnerability Auditing
+# ==============================================================================
+# Flaw 1: Bloated, unpinned base image with large attack surface and known CVEs
+FROM node:18
+
+# Flaw 2: Running in default directory without workspace isolation
+WORKDIR /app
+
+# Flaw 3: Inefficient caching and copying everything at once
+# Without a strict .dockerignore, this copies .env, .git, local dev.db, and node_modules
+COPY . .
+
+# Flaw 4: Single-stage build installing full devDependencies (tsc, linters, testbeds)
+RUN npm install
+
+# Flaw 5: Building in place without stripping build-time tools
+RUN npx prisma generate
+RUN npm run build
+
+# Flaw 6: CRITICAL PRIVILEGE FLAW - Container runs as 'root' (UID 0)
+# Any application vulnerability (e.g. RCE) grants the attacker root access
+# to the container namespace, significantly facilitating container breakout.
+# (Notice: No USER directive!)
+
+# Flaw 7: Exposing service on port 4000 without HEALTHCHECK
+EXPOSE 4000
+
+ENV NODE_ENV=development
+ENV PORT=4000
+
+# Flaw 8: Running development tsx/node directly as root
+CMD ["node", "dist/src/server.js"]

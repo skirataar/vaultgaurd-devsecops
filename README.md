@@ -148,3 +148,92 @@ npm run test:controls
 ======================================================================
 ✨ All security controls and regression tests passed successfully!
 ```
+
+---
+
+## 🛡️ Phase 5: Custom Semgrep SAST & Trivy Container Hardening
+
+### 1. Custom Semgrep SAST Rules (`.semgrep/vaultguard-rules.yml`)
+
+Our custom Semgrep rule suite implements 3 targeted AST inspection rules mapped to OWASP and CWE classifications:
+
+```mermaid
+flowchart LR
+    SourceCode[TypeScript Source AST] --> SemgrepEngine[Semgrep AST Pattern Matcher]
+    SemgrepEngine --> Rule1{Missing ownerId in where clause?}
+    Rule1 -->|Yes: findUnique / findFirst without ownerId| Alert1["🚨 Alert: CWE-639 BOLA"]
+    Rule1 -->|No: pattern-not matched| Safe1["✅ Pass"]
+
+    SemgrepEngine --> Rule2{Direct $queryRawUnsafe call?}
+    Rule2 -->|Yes| Alert2["🚨 Alert: CWE-89 SQL Injection"]
+    Rule2 -->|No: ORM / Tagged template| Safe2["✅ Pass"]
+
+    SemgrepEngine --> Rule3{Unvalidated fetch/axios in route handler?}
+    Rule3 -->|Yes| Alert3["🚨 Alert: CWE-918 SSRF Risk"]
+    Rule3 -->|No: ssrfGuard / safeOutboundFetch| Safe3["✅ Pass"]
+```
+
+#### How `pattern` and `pattern-not` Eliminate False Positives
+Traditional regex-based grep tools cannot understand programming language syntax: they match words inside comments, string literals, and variable names alike. Semgrep parses source files into an Abstract Syntax Tree (AST), enabling semantic pattern matching.
+
+In **Rule 1 (`vaultguard-prisma-missing-owner-id`)**:
+```yaml
+patterns:
+  - pattern-either:
+      - pattern: $PRISMA.invoice.findUnique({ ... })
+      - pattern: $PRISMA.invoice.findFirst({ ... })
+  - pattern-not: |
+      $PRISMA.invoice.$METHOD({
+        where: {
+          ...,
+          ownerId: $OWNER,
+          ...
+        },
+        ...
+      })
+```
+- `pattern-either` identifies all invocations of invoice primary key / object lookups across the codebase.
+- `pattern-not` acts as an AST-level filter: if the AST contains an object literal inside `where` with the key `ownerId: $OWNER`, Semgrep automatically discards the finding.
+- **Result:** Legitimate multi-tenant lookups (`prisma.invoice.findFirst({ where: { id, ownerId: req.user.sub } })`) produce **zero false positives**, while unscoped lookups are immediately flagged.
+
+---
+
+### 2. Container Hardening: `Dockerfile.vulnerable` vs `Dockerfile`
+
+| Security Dimension | `Dockerfile.vulnerable` (Anti-Pattern) | `Dockerfile` (Hardened Production) |
+|---|---|---|
+| **Base Image** | `node:18` (Bloated Debian base, ~1GB, full OS packages) | `node:20-alpine` (Minimal Alpine base, ~180MB, minimal CVE surface) |
+| **Execution User** | `root` (UID 0 - full host kernel capability mapping) | `USER node` (UID 1000 - non-root, principle of least privilege) |
+| **Build Architecture** | Single-stage (compilers, npm cache, devDeps left in image) | Multi-stage (`builder` -> `runner` with `npm prune --production`) |
+| **Context Hygiene** | No `.dockerignore` (copies `.env`, `.git`, local `dev.db`) | Strict `.dockerignore` (excludes secrets, git history, volatile DBs) |
+| **Health Monitoring** | None (orchestrator cannot detect hung processes) | `HEALTHCHECK` with periodic non-root endpoint probe |
+| **Process Management** | Node as PID 1 (zombie processes, improper signal forwarding) | `dumb-init` (proper signal forwarding and PID 1 zombie reaping) |
+
+---
+
+### 3. Local Security Scan Execution
+
+Run all Phase 5 security audits locally:
+```bash
+# 1. Run Semgrep Custom AST SAST Rules
+npm run scan:sast
+
+# 2. Run Trivy Container Misconfiguration Scan
+npm run scan:trivy
+
+# 3. Run Full Security Orchestration Suite (SAST + Trivy Config + Secret + FS)
+npm run scan:all
+```
+
+#### Trivy Audit Findings Summary
+```text
+Report Summary
+┌───────────────────────┬────────────┬───────────────────┐
+│        Target         │    Type    │ Misconfigurations │
+├───────────────────────┼────────────┼───────────────────┤
+│ Dockerfile            │ dockerfile │         0         │  <-- Clean production image
+├───────────────────────┼────────────┼───────────────────┤
+│ Dockerfile.vulnerable │ dockerfile │         2         │  <-- Flags DS-0002 (root user) & DS-0026 (missing healthcheck)
+└───────────────────────┴────────────┴───────────────────┘
+```
+

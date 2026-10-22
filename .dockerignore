@@ -1,0 +1,30 @@
+# Build Artifacts & Dependencies
+node_modules/
+dist/
+npm-debug.log*
+
+# Secrets & Environment Configurations (CRITICAL)
+.env
+.env.*
+*.pem
+*.key
+
+# Local SQLite Databases & Volatile State
+*.db
+*.db-journal
+*.sqlite
+
+# Version Control & IDE Metadata
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+
+# Testing, Tooling & Documentation
+tests/
+scripts/
+.semgrep/
+README.md
+LICENSE
+audit-report*.json

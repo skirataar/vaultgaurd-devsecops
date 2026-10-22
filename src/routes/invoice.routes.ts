@@ -24,7 +24,7 @@ invoiceRouter.get('/search', authenticateToken, async (req: Request, res: Respon
       // Allows an attacker to break out of the string literal and execute arbitrary SQL syntax
       // (e.g. `client=' OR '1'='1` or UNION-based exfiltration), completely ignoring multi-tenant isolation.
       const rawQuery = `SELECT * FROM "Invoice" WHERE "description" LIKE '%${client}%'`;
-      const invoices = await prisma.$queryRawUnsafe<any[]>(rawQuery);
+      const invoices = (await prisma.$queryRawUnsafe(rawQuery)) as any[];
 
       res.status(200).json({
         securityMode: 'vulnerable',

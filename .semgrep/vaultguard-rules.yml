@@ -1,0 +1,97 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Rule 1: Missing Tenant Ownership Check in Prisma Invoice Queries (BOLA / IDOR)
+  # CWE-639 / OWASP API1:2023
+  # ---------------------------------------------------------------------------
+  - id: vaultguard-prisma-missing-owner-id
+    languages:
+      - typescript
+      - javascript
+    severity: ERROR
+    message: |
+      [CWE-639 / OWASP API1:2023 BOLA Violation]
+      Querying invoice object without enforcing tenant ownership ('ownerId') in the 'where' clause.
+      Fetching multi-tenant entities by primary key alone permits unauthorized cross-tenant data access.
+      Remediation: Always include 'ownerId: req.user.sub' inside the 'where' filter:
+        await prisma.invoice.findFirst({ where: { id, ownerId: req.user.sub } })
+    metadata:
+      cwe: "CWE-639: Authorization Bypass Through User-Controlled Key"
+      owasp: "A01:2021 - Broken Access Control / OWASP API1:2023 - Broken Object Level Authorization"
+      category: security
+      confidence: HIGH
+      impact: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: $PRISMA.invoice.findUnique({ ... })
+          - pattern: $PRISMA.invoice.findFirst({ ... })
+      - pattern-not: |
+          $PRISMA.invoice.$METHOD({
+            where: {
+              ...,
+              ownerId: $OWNER,
+              ...
+            },
+            ...
+          })
+
+  # ---------------------------------------------------------------------------
+  # Rule 2: Unsafe Raw SQL Execution (SQL Injection)
+  # CWE-89 / OWASP A03:2021
+  # ---------------------------------------------------------------------------
+  - id: vaultguard-prisma-raw-sql-unsafe
+    languages:
+      - typescript
+      - javascript
+    severity: ERROR
+    message: |
+      [CWE-89 / OWASP A03:2021 SQL Injection]
+      Detected invocation of '$queryRawUnsafe' or '$executeRawUnsafe'.
+      These methods bypass Prisma's compile-time AST-level parameterization and permit raw SQL string interpolation.
+      Remediation: Refactor to use parameterized tagged template literals ('prisma.$queryRaw`SELECT ...`')
+      or type-safe Prisma ORM query methods ('findMany', 'findFirst') with scoped filtering.
+    metadata:
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      owasp: "A03:2021 - Injection"
+      category: security
+      confidence: HIGH
+      impact: HIGH
+    pattern-either:
+      - pattern: $PRISMA.$queryRawUnsafe(...)
+      - pattern: $PRISMA.$queryRawUnsafe<...>(...)
+      - pattern: $PRISMA.$executeRawUnsafe(...)
+      - pattern: $PRISMA.$executeRawUnsafe<...>(...)
+
+  # ---------------------------------------------------------------------------
+  # Rule 3: Unvalidated Outbound Network Dispatch (SSRF)
+  # CWE-918 / OWASP A10:2021
+  # ---------------------------------------------------------------------------
+  - id: vaultguard-unvalidated-ssrf-fetch
+    languages:
+      - typescript
+      - javascript
+    severity: WARNING
+    message: |
+      [CWE-918 / OWASP A10:2021 SSRF Risk]
+      Direct outbound HTTP request ('fetch' or 'axios') initiated inside route handler without passing through
+      the centralized SSRF Guard ('validateUrlForSSRF' or 'safeOutboundFetch').
+      Unvalidated outbound requests can be abused to probe internal microservices, loopback APIs,
+      or cloud instance metadata services (169.254.169.254).
+      Remediation: Pass the target URL through 'safeOutboundFetch(targetUrl)' or validate beforehand with 'validateUrlForSSRF(targetUrl)'.
+    metadata:
+      cwe: "CWE-918: Server-Side Request Forgery (SSRF)"
+      owasp: "A10:2021 - Server-Side Request Forgery (SSRF)"
+      category: security
+      confidence: MEDIUM
+      impact: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: fetch($TARGET, ...)
+          - pattern: axios.$VERB($TARGET, ...)
+      - pattern-inside: |
+          $ROUTER.$METHOD($PATH, ..., async ($REQ, $RES, ...) => {
+            ...
+          })
+      - pattern-not-inside: |
+          function safeOutboundFetch(...) { ... }
+      - pattern-not-inside: |
+          async function safeOutboundFetch(...) { ... }
