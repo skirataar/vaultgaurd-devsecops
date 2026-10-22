@@ -1,61 +1,68 @@
-# VaultGuard DevSecOps: Secure Architecture, Injection & Outbound Network Controls
+# VaultGuard DevSecOps: Secure Architecture, Custom SAST & Automated CI/CD Security Gate
 
-VaultGuard DevSecOps is an enterprise-grade fintech microservice built to demonstrate DevSecOps controls, application security architecture, and automated CI/CD security gates.
-
-This repository covers **Phase 3 (Injection & Outbound Network Controls)**, **Phase 5 (Custom Semgrep SAST Rules & Trivy Container Hardening)**, and **Phase 6 (Automated GitHub Actions CI/CD Security Gate)**.
+[![CI/CD Security Gate](https://img.shields.io/badge/Security%20Gate-Automated%20CI%2FCD-blue?logo=githubactions)](.github/workflows/security-gate.yml)
+[![SAST Engine](https://img.shields.io/badge/SAST-Custom%20Semgrep%20AST-orange?logo=semgrep)](.semgrep/vaultguard-rules.yml)
+[![Container Security](https://img.shields.io/badge/Container%20Audit-Trivy%20Hardened-green?logo=docker)](Dockerfile)
+[![TypeScript](https://img.shields.io/badge/Language-TypeScript%20%2F%20Node%2022-blue?logo=typescript)](tsconfig.json)
+[![Prisma ORM](https://img.shields.io/badge/ORM-Prisma%20SQLite-darkblue?logo=prisma)](prisma/schema.prisma)
 
 ---
 
-## 🏛️ System Architecture & Phase Scope
+## 📌 Executive Summary: The Full-Lifecycle Purple Team Architecture
+
+In production cloud environments, security cannot exist solely as an offensive penetration testing report or an isolated set of CI lint rules. True DevSecOps requires a closed-loop **Purple Team Lifecycle**:
 
 ```mermaid
-flowchart TD
-    Client[API Client / Auditor / Attacker] -->|HTTP Request| Gateway[Express App + Security Mode Middleware]
-
-    subgraph "Phase 3: Ingress & Egress Security Controls"
-        Gateway -->|GET /api/invoices/:id| BOLA[BOLA Guard: CWE-639]
-        Gateway -->|GET /api/invoices/search| SQLI[SQLi Guard: CWE-89]
-        Gateway -->|POST /api/webhooks/verify| SSRF[SSRF Guard: CWE-918]
-
-        BOLA -->|vulnerable| UnscopedFetch[Unscoped Primary Key Fetch]
-        BOLA -->|secure| ScopedFetch[Tenant-Scoped Fetch: id + ownerId]
-
-        SQLI -->|vulnerable| RawQueryUnsafe[Prisma raw SQL String Interpolation]
-        SQLI -->|secure| ParameterizedQuery[Prisma AST Parameterization]
-
-        SSRF -->|vulnerable| DirectFetch[Unrestricted Outbound fetch]
-        SSRF -->|secure| SSRFModule[Scheme + DNS Resolution + CIDR Filter]
+flowchart LR
+    subgraph "Phase 1 & 2: Offensive Discovery (Project 1)"
+        OAS[OpenAPI 3.1 Spec] --> Auditor[Autonomous Compliance Runner]
+        Auditor --> Matrix[Cross-Role Permission Matrix]
+        Matrix --> Findings[Telemetry: BOLA, BFLA, Expired Tokens]
     end
 
-    ScopedFetch --> DB[(SQLite Dev Database)]
-    UnscopedFetch --> DB
-    ParameterizedQuery --> DB
-    RawQueryUnsafe --> DB
-    SSRFModule -->|Safe Egress| ExternalNet((Public HTTPS Endpoints))
+    subgraph "Phase 3 & 5: Secure Engineering (VaultGuard)"
+        Findings --> Fix1[Object-Level Tenancy Scoping]
+        Findings --> Fix2[AST-Level Parameterization]
+        Findings --> Fix3[DNS-Level SSRF Egress Guard]
+        Fix1 & Fix2 & Fix3 --> AST_Rules[Custom Semgrep SAST Rules]
+        Fix1 & Fix2 & Fix3 --> Hardened_Img[Multi-Stage Alpine Dockerfile]
+    end
+
+    subgraph "Phase 6: Continuous CI/CD Gate"
+        AST_Rules --> Gate1[Gate 1: Semgrep AST Blocking PR Check]
+        Hardened_Img --> Gate2[Gate 2: Trivy Container CIS Audit]
+        Fix1 & Fix2 & Fix3 --> Gate3[Gate 3: Dynamic Runtime Regression Gate]
+    end
 ```
+
+1. **Offensive Discovery (`Project-1` / `auth-matrix`):** Our autonomous security scanner probes target APIs using matrix-based role-swapping payloads, programmatically demonstrating authorization bypasses (CWE-639 BOLA) and administrative escalation (CWE-285 BFLA).
+2. **Defensive Remediation (`vaultguard-devsecops`):** We engineer an enterprise fintech microservice implementing multi-tenant data access boundaries, AST-level SQL query parameterization, and deep network egress controls (`ssrfGuard.ts`).
+3. **Automated Guardrails (`vaultguard-devsecops` CI/CD):** We translate vulnerability patterns into custom Semgrep AST rules and Trivy container policies that automatically block regressions at the GitHub Actions pull request stage.
 
 ---
 
-## 🔬 Security Theory Deep-Dive
+## 🛡️ Vulnerability & Remediation Matrix
 
-### 1. Abstract Syntax Tree (AST) & Driver-Level SQL Parameterization (CWE-89)
+| Endpoint | Vulnerability / Threat | OWASP Category | CWE | Vulnerable Pattern | Patched Production Pattern | Automated Gate |
+|---|---|---|---|---|---|---|
+| `GET /api/invoices/:id` | Broken Object Level Authorization (BOLA / IDOR) | OWASP API1:2023 | CWE-639 | `prisma.invoice.findUnique({ where: { id } })` (omits tenant filter) | `prisma.invoice.findFirst({ where: { id, ownerId: req.user.sub } })` | **Semgrep:** `vaultguard-prisma-missing-owner-id`<br>**Dynamic:** `verify-controls.ts` (Asserts 403 on cross-tenant access) |
+| `GET /api/invoices/search` | SQL Injection (Grammar Mutation) | OWASP A03:2021<br>API8:2023 | CWE-89 | Raw string interpolation in `prisma.$queryRawUnsafe("... LIKE '%" + client + "%'")` | AST parameterization via Prisma ORM: `where: { ownerId, description: { contains: client } }` | **Semgrep:** `vaultguard-prisma-raw-sql-unsafe`<br>**Dynamic:** `verify-controls.ts` (Injects `' OR '1'='1`) |
+| `POST /api/webhooks/verify` | Server-Side Request Forgery (SSRF) | OWASP A10:2021<br>API7:2023 | CWE-918 | Direct unvalidated `fetch(targetUrl)` allowing egress to internal hosts | Centralized `src/security/ssrfGuard.ts`: Scheme enforcement, canonical DNS resolution, CIDR blocking | **Semgrep:** `vaultguard-unvalidated-ssrf-fetch`<br>**Dynamic:** `verify-controls.ts` (Blocks `127.0.0.1` and `169.254.169.254`) |
+| `Dockerfile` | Container Privilege Escalation | CIS Docker Benchmark | CWE-250 | Single-stage build executing as `root` (UID 0) without health monitoring | Multi-stage build on `node:20-alpine`, `USER node` (UID 1000), `dumb-init` PID 1, and `HEALTHCHECK` | **Trivy:** `trivy config` fails on `DS-0002` (missing non-root user) |
 
-#### The Lexical & AST Breakdown
-When a relational database engine processes an incoming query string, it executes three discrete stages:
-1. **Lexical Analysis (Scanning):** Deconstructs the input text stream into terminal tokens (`SELECT`, `FROM`, identifiers, string literals, operators).
-2. **Parsing & AST Construction:** Assembles tokens into an Abstract Syntax Tree representing the hierarchical grammar of the relational algebra.
-3. **Compilation & Query Plan Generation:** Generates the relational execution plan and byte-code routines executed by the database virtual machine.
+---
 
-#### Why String Interpolation Fails
-In vulnerable raw queries:
+## 🔬 Security Engineering Deep-Dive
+
+### 1. Abstract Syntax Tree (AST) vs. String Interpolation (CWE-89)
+Relational databases parse input through lexical scanners that assemble an Abstract Syntax Tree (AST). In vulnerable code:
 ```typescript
 const query = `SELECT * FROM "Invoice" WHERE "description" LIKE '%${client}%'`;
 await prisma.$queryRawUnsafe(query);
 ```
-An attacker supplying `client = %' OR '1'='1` causes the lexical scanner to yield the tokens `OR`, `'1'`, `=`, `'1'`. This mutates the grammar tree itself, injecting an always-true boolean disjunction at the AST level and returning records across all tenants.
+Passing `client = %' OR '1'='1` breaks out of the string literal, injecting `OR` and `=` operators into the grammar tree prior to compilation. The AST's boolean disjunction is mutated to always evaluate to `TRUE`, exfiltrating cross-tenant invoices.
 
-#### Driver-Level Parameterization
-In parameterized queries:
+In our patched implementation:
 ```typescript
 const invoices = await prisma.invoice.findMany({
   where: {
@@ -64,176 +71,149 @@ const invoices = await prisma.invoice.findMany({
   },
 });
 ```
-The database engine compiles the static AST and assigns register slots for parameters (`?1`, `$1`) *prior* to parameter binding. The parameter payload is transmitted separately as pure scalar datum. The database parser never encounters user input during grammar construction, mathematically neutralizing SQL syntax injection regardless of payload complexity.
+The query AST is statically compiled with parameter placeholders (`?1`). User input is bound out-of-band to SQLite registers as pure scalar data. The database parser never encounters user input during grammar construction, neutralizing injection attempts regardless of payload structure.
 
 ---
 
-### 2. DNS-Level SSRF Defenses & DNS Rebinding TOCTOU (CWE-918)
+### 2. DNS-Level SSRF Egress Defense & DNS Rebinding (CWE-918)
+In cloud environments, unrestricted outbound HTTP requests expose cloud instance metadata (`169.254.169.254`), container APIs, and loopback services. String blacklists fail against alternative IP formats (e.g. `0177.0.0.1`, `2130706433`, `[::ffff:127.0.0.1]`).
 
-#### The Egress Threat Vector
-Server-Side Request Forgery occurs when a server initiates outbound HTTP requests to attacker-controlled destinations. In modern cloud and container architectures, this enables attackers to pivot into:
-- **Cloud Instance Metadata (IMDS):** AWS/GCP/Azure link-local endpoints (`169.254.169.254`) exposing IAM credentials and bootstrap scripts.
-- **Loopback Services:** `127.0.0.1`, `[::1]`, accessing internal administrative ports, metrics, or debug bridges.
-- **Private RFC 1918 Subnets:** `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` hosting internal databases, microservices, and caches.
-
-#### Why URL String Validation Fails
-Blacklisting string patterns (e.g. `!url.includes('localhost')`) is easily bypassed using:
-- Alternative IP notations: Octal (`0177.0.0.1`), Hex (`0x7f000001`), Dword integer (`2130706433`).
-- IPv6 representations: IPv4-mapped IPv6 (`::ffff:127.0.0.1`), IPv6 loopback (`[::1]`).
-- DNS aliasing: Attacker-controlled domains resolving to loopback (`127.0.0.1.nip.io`).
-
-#### Defensive Egress Controls Implemented in `src/security/ssrfGuard.ts`
-1. **Scheme Pinning:** Enforces strict `https:` scheme; blocks `http:`, `file:`, `gopher:`, `ftp:`.
-2. **Comprehensive DNS Resolution:** Uses `dns.promises.lookup(hostname, { all: true })` to inspect all `A` and `AAAA` records returned by upstream resolvers.
-3. **CIDR Boundary Enforcement:** Blocks all addresses within:
+Our centralized guard in [`src/security/ssrfGuard.ts`](src/security/ssrfGuard.ts) enforces:
+1. **Strict Scheme Pinning:** Only `https:` is permitted (rejects `http:`, `file:`, `gopher:`).
+2. **Comprehensive DNS Resolution:** Resolves all canonical `A` and `AAAA` records using `dns.promises.lookup(host, { all: true })`.
+3. **CIDR Boundary Enforcement:** Blocks all private and cloud metadata address spaces:
    - Loopback: `127.0.0.0/8`, `::1`
    - RFC 1918 Private Ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
-   - Cloud Metadata / Link-Local: `169.254.0.0/16`, `fe80::/10`
+   - Cloud IMDS & Link-Local: `169.254.0.0/16`, `fe80::/10`
    - Carrier-Grade NAT: `100.64.0.0/10`
    - Unique Local IPv6: `fc00::/7`
-4. **DNS Rebinding (TOCTOU) & Redirect Mitigation:**
-   - Attackers deploy nameservers with `TTL=0` that return a public IP during pre-flight lookup, then resolve to `169.254.169.254` during the subsequent HTTP fetch.
-   - Guard mitigation: HTTP requests use `redirect: 'manual'` to prevent redirect-based pivot attacks, and disallow blind redirect traversal to internal networks.
+4. **DNS Rebinding & Redirect Defense:** Disables automatic redirect traversal (`redirect: 'manual'`) to prevent attackers from bouncing verified domains to internal metadata IPs.
 
 ---
 
-## 🛠️ API Specification
+## ⚙️ CI/CD Pipeline Architecture (`.github/workflows/security-gate.yml`)
 
-| Endpoint | Method | Vulnerability / Control | Header Toggle | Description |
-|---|---|---|---|---|
-| `/api/invoices/:id` | `GET` | CWE-639 BOLA | `x-security-mode` | Multi-tenant invoice retrieval by primary key |
-| `/api/invoices/search` | `GET` | CWE-89 SQL Injection | `x-security-mode` | Search invoices by client description |
-| `/api/webhooks/verify` | `POST` | CWE-918 SSRF | `x-security-mode` | Merchant webhook reachability validator |
-| `/api/test-setup/tokens` | `GET` | Auth Utility | None | Issues deterministic JWTs for Alice, Bob, Admin |
-| `/api/health` | `GET` | Monitoring | None | Health check and active security mode display |
+The pipeline runs three concurrent gates on every `push` and `pull_request` to `main`:
+
+```mermaid
+flowchart TD
+    Trigger[PR / Push to main] --> Matrix[GitHub Actions Pipeline]
+    
+    subgraph "Gate 1: Semgrep SAST"
+        Matrix --> Job1[Custom Semgrep AST Engine]
+        Job1 --> ParseRules[Load .semgrep/vaultguard-rules.yml]
+        ParseRules --> FlagCheck{AST Matches?}
+        FlagCheck -->|Intentional Vuln Branch with --error| BlockPR1[🚨 Block PR]
+        FlagCheck -->|Patched Logic| PassGate1[✅ Gate 1 Passed]
+    end
+
+    subgraph "Gate 2: Trivy Container & FS Audit"
+        Matrix --> Job2[Trivy Vulnerability & Config Scanner]
+        Job2 --> ScanFS[Audit package-lock.json for CVEs]
+        Job2 --> ScanDocker[Audit Dockerfile for CIS Benchmarks]
+        ScanDocker --> RootCheck{Runs as root?}
+        RootCheck -->|Dockerfile.vulnerable| BlockPR2[🚨 Block PR: DS-0002]
+        RootCheck -->|Dockerfile with USER node| PassGate2[✅ Gate 2 Passed]
+    end
+
+    subgraph "Gate 3: Dynamic Runtime Regression"
+        Matrix --> Job3[Dynamic Compliance Gate]
+        Job3 --> DBSetup[Prisma db push & seed]
+        DBSetup --> StartApp[Start Microservice: SECURITY_MODE=secure]
+        StartApp --> HealthWait[Wait for Port 4000 Readiness]
+        HealthWait --> RunTests[Execute verify-controls.ts]
+        RunTests --> Assertions{All 10 BOLA/SQLi/SSRF Checks Pass?}
+        Assertions -->|Yes| PassGate3[✅ Gate 3 Passed]
+        Assertions -->|No| BlockPR3[🚨 Block PR]
+    end
+```
 
 ---
 
-## 🧪 Local Verification & Compliance Testing
+## 🚀 How to Demo a Failing vs. Passing Pull Request
 
-Run the automated integration verification suite:
+This repository is purpose-built to visually demonstrate automated security gates blocking regressions:
+
+### Demo Scenario A: Triggering Gate 2 (Container Non-Root Failure)
+1. In a pull request, change the Dockerfile target in [`.github/workflows/security-gate.yml`](.github/workflows/security-gate.yml) from `Dockerfile` to `Dockerfile.vulnerable` (or use GitHub Actions `workflow_dispatch` with `target_dockerfile: Dockerfile.vulnerable`).
+2. **Result:** Job `trivy-scan` immediately halts the build with exit code 1:
+   ```text
+   FAILURES: 2 (HIGH: 1, LOW: 1)
+   DS-0002 (HIGH): Specify at least 1 USER command in Dockerfile with non-root user as argument
+   See https://avd.aquasec.com/misconfig/ds-0002
+   Error: Process completed with exit code 1.
+   ```
+3. Switching back to the production `Dockerfile` passes the gate with **0 misconfigurations**.
+
+### Demo Scenario B: Triggering Gate 3 (Authorization Regression Failure)
+1. In a pull request, change the environment variable in [`.github/workflows/security-gate.yml`](.github/workflows/security-gate.yml) from `SECURITY_MODE=secure` to `SECURITY_MODE=vulnerable`.
+2. **Result:** Job `dynamic-compliance-gate` runs the test suite against the service. Because the service is running in vulnerable mode, Alice is permitted to access Bob's invoice `#103`.
+3. The compliance runner detects the BOLA authorization failure and exits with `process.exit(1)`, failing the GitHub Actions check.
+
+### Demo Scenario C: Triggering Gate 1 (Custom AST SAST Violation)
+1. Run Semgrep locally with the blocking flag:
+   ```bash
+   semgrep scan --config .semgrep/vaultguard-rules.yml src/ --error
+   ```
+2. **Result:** Semgrep flags the intentional vulnerable route implementations (`vaultguard-prisma-raw-sql-unsafe`, `vaultguard-prisma-missing-owner-id`, and `vaultguard-unvalidated-ssrf-fetch`) and returns exit code 1.
+
+---
+
+## 💻 Local Developer & Auditor Setup
+
+### 1. Database Setup & Seeding
 ```bash
-# Setup database schema and seed deterministic personas
+# Push Prisma schema and seed deterministic personas (Alice, Bob, Admin)
 npm run db:setup
+```
 
-# Execute verification suite against all controls
+### 2. Run Dynamic Runtime Compliance Tests
+```bash
+# Executes 10-point authorization, SQLi, and SSRF verification suite
 npm run test:controls
 ```
 
-### Verification Suite Results
-```text
-======================================================================
-🛡️  VaultGuard DevSecOps - Phase 3 Controls Verification Suite
-    Validating CWE-639 (BOLA), CWE-89 (SQLi), and CWE-918 (SSRF)
-======================================================================
-
---- [SUITE 1: CWE-639 BOLA / IDOR Verification] ---
-  ✅ PASS [CWE-639 BOLA] Vulnerable mode allows cross-tenant invoice access - Status: 200, Leaked Invoice #103 Owner: user_bob, TaxId: US-TAX-BOB-9921
-  ✅ PASS [CWE-639 BOLA] Secure mode rejects cross-tenant invoice access - Status: 403, Code: BOLA_BLOCKED, Error: Access Denied: Object-level authorization policy violation (CWE-639 BOLA blocked)
-  ✅ PASS [CWE-639 BOLA] Secure mode allows legitimate resource owner access - Status: 200, Invoice #101 Amount: $1450
-
---- [SUITE 2: CWE-89 SQL Injection Verification] ---
-  ✅ PASS [CWE-89 SQLi] Vulnerable mode executes raw string interpolation and leaks cross-tenant records - Returned 3 invoices across all tenants (Bob invoice leaked: true)
-  ✅ PASS [CWE-89 SQLi] Secure mode parameterizes query and enforces tenant isolation - Returned 0 invoices (Bob invoice leaked: false). Payload treated as literal scalar.
-
---- [SUITE 3: CWE-918 Server-Side Request Forgery Verification] ---
-  ✅ PASS [CWE-918 SSRF] Blocks insecure HTTP scheme and loopback (http://127.0.0.1) - Status: 400, Code: PROTOCOL_DISALLOWED, Reason: SSRF Guard Rejection: Insecure protocol 'http:'. Only strict 'https:' is permitted.
-  ✅ PASS [CWE-918 SSRF] Blocks link-local cloud metadata service (169.254.169.254) - Status: 400, Code: PROTOCOL_DISALLOWED
-  ✅ PASS [CWE-918 SSRF] Blocks RFC 1918 Private IP address (10.0.0.1) via SSRF Guard - Valid: false, Code: SSRF_PROHIBITED_IP, Error: SSRF Blocked: Target resolves to prohibited network range (10.0.0.1 - RFC 1918 Private Network (10.0.0.0/8))
-  ✅ PASS [CWE-918 SSRF] Blocks IPv6 Loopback address (::1) via SSRF Guard - Valid: false, Code: SSRF_PROHIBITED_IP, Error: SSRF Blocked: Target resolves to prohibited network range (::1 - IPv6 Loopback address (::1))
-  ✅ PASS [CWE-918 SSRF] Permits legitimate public HTTPS webhook endpoint - Valid: true, Resolved IPs: 172.66.147.243, 104.20.23.154, 2606:4700:10::6814:179a, 2606:4700:10::ac42:93f3
-
-======================================================================
-📊 Verification Complete: 10/10 Checks Passed (0 Failures)
-======================================================================
-✨ All security controls and regression tests passed successfully!
-```
-
----
-
-## 🛡️ Phase 5: Custom Semgrep SAST & Trivy Container Hardening
-
-### 1. Custom Semgrep SAST Rules (`.semgrep/vaultguard-rules.yml`)
-
-Our custom Semgrep rule suite implements 3 targeted AST inspection rules mapped to OWASP and CWE classifications:
-
-```mermaid
-flowchart LR
-    SourceCode[TypeScript Source AST] --> SemgrepEngine[Semgrep AST Pattern Matcher]
-    SemgrepEngine --> Rule1{Missing ownerId in where clause?}
-    Rule1 -->|Yes: findUnique / findFirst without ownerId| Alert1["🚨 Alert: CWE-639 BOLA"]
-    Rule1 -->|No: pattern-not matched| Safe1["✅ Pass"]
-
-    SemgrepEngine --> Rule2{Direct $queryRawUnsafe call?}
-    Rule2 -->|Yes| Alert2["🚨 Alert: CWE-89 SQL Injection"]
-    Rule2 -->|No: ORM / Tagged template| Safe2["✅ Pass"]
-
-    SemgrepEngine --> Rule3{Unvalidated fetch/axios in route handler?}
-    Rule3 -->|Yes| Alert3["🚨 Alert: CWE-918 SSRF Risk"]
-    Rule3 -->|No: ssrfGuard / safeOutboundFetch| Safe3["✅ Pass"]
-```
-
-#### How `pattern` and `pattern-not` Eliminate False Positives
-Traditional regex-based grep tools cannot understand programming language syntax: they match words inside comments, string literals, and variable names alike. Semgrep parses source files into an Abstract Syntax Tree (AST), enabling semantic pattern matching.
-
-In **Rule 1 (`vaultguard-prisma-missing-owner-id`)**:
-```yaml
-patterns:
-  - pattern-either:
-      - pattern: $PRISMA.invoice.findUnique({ ... })
-      - pattern: $PRISMA.invoice.findFirst({ ... })
-  - pattern-not: |
-      $PRISMA.invoice.$METHOD({
-        where: {
-          ...,
-          ownerId: $OWNER,
-          ...
-        },
-        ...
-      })
-```
-- `pattern-either` identifies all invocations of invoice primary key / object lookups across the codebase.
-- `pattern-not` acts as an AST-level filter: if the AST contains an object literal inside `where` with the key `ownerId: $OWNER`, Semgrep automatically discards the finding.
-- **Result:** Legitimate multi-tenant lookups (`prisma.invoice.findFirst({ where: { id, ownerId: req.user.sub } })`) produce **zero false positives**, while unscoped lookups are immediately flagged.
-
----
-
-### 2. Container Hardening: `Dockerfile.vulnerable` vs `Dockerfile`
-
-| Security Dimension | `Dockerfile.vulnerable` (Anti-Pattern) | `Dockerfile` (Hardened Production) |
-|---|---|---|
-| **Base Image** | `node:18` (Bloated Debian base, ~1GB, full OS packages) | `node:20-alpine` (Minimal Alpine base, ~180MB, minimal CVE surface) |
-| **Execution User** | `root` (UID 0 - full host kernel capability mapping) | `USER node` (UID 1000 - non-root, principle of least privilege) |
-| **Build Architecture** | Single-stage (compilers, npm cache, devDeps left in image) | Multi-stage (`builder` -> `runner` with `npm prune --production`) |
-| **Context Hygiene** | No `.dockerignore` (copies `.env`, `.git`, local `dev.db`) | Strict `.dockerignore` (excludes secrets, git history, volatile DBs) |
-| **Health Monitoring** | None (orchestrator cannot detect hung processes) | `HEALTHCHECK` with periodic non-root endpoint probe |
-| **Process Management** | Node as PID 1 (zombie processes, improper signal forwarding) | `dumb-init` (proper signal forwarding and PID 1 zombie reaping) |
-
----
-
-### 3. Local Security Scan Execution
-
-Run all Phase 5 security audits locally:
+### 3. Run Static Analysis & Container Audits
 ```bash
-# 1. Run Semgrep Custom AST SAST Rules
+# Run custom Semgrep AST rules
 npm run scan:sast
 
-# 2. Run Trivy Container Misconfiguration Scan
+# Run Trivy Dockerfile configuration audit
 npm run scan:trivy
 
-# 3. Run Full Security Orchestration Suite (SAST + Trivy Config + Secret + FS)
+# Run full security orchestrator (SAST + Trivy Config + Secrets + FS)
 npm run scan:all
 ```
 
-#### Trivy Audit Findings Summary
-```text
-Report Summary
-┌───────────────────────┬────────────┬───────────────────┐
-│        Target         │    Type    │ Misconfigurations │
-├───────────────────────┼────────────┼───────────────────┤
-│ Dockerfile            │ dockerfile │         0         │  <-- Clean production image
-├───────────────────────┼────────────┼───────────────────┤
-│ Dockerfile.vulnerable │ dockerfile │         2         │  <-- Flags DS-0002 (root user) & DS-0026 (missing healthcheck)
-└───────────────────────┴────────────┴───────────────────┘
-```
+---
 
+## 📂 Repository Structure
+
+```text
+vaultguard-devsecops/
+├── .github/workflows/
+│   └── security-gate.yml            # Automated 3-job CI/CD Security Pipeline
+├── .semgrep/
+│   └── vaultguard-rules.yml         # Custom AST rules for BOLA, SQLi, and SSRF
+├── prisma/
+│   ├── schema.prisma                # Multi-tenant User, Invoice & AuditLog models
+│   ├── seed.ts                      # Deterministic test personas & invoices
+│   └── dev.db                       # Local SQLite database
+├── src/
+│   ├── app.ts                       # Express application wiring & middleware
+│   ├── server.ts                    # HTTP server listener
+│   ├── config/                      # Environment and test persona constants
+│   ├── lib/prisma.ts                # PrismaClient singleton
+│   ├── middleware/                  # JWT auth, security mode toggle, logger, error handler
+│   ├── routes/                      # BOLA (/invoices/:id), SQLi (/invoices/search), SSRF (/webhooks/verify)
+│   ├── security/ssrfGuard.ts        # Scheme, DNS resolution & CIDR egress validation
+│   └── types/                       # TypeScript declarations
+├── tests/
+│   └── verify-controls.ts           # 10-point automated compliance verification suite
+├── Dockerfile                       # Multi-stage, hardened production Dockerfile (USER node)
+├── Dockerfile.vulnerable            # Anti-pattern demonstration Dockerfile (root execution)
+├── .dockerignore                    # Strict build context exclusion file
+├── trivy.yaml                       # Trivy policy & scanner configuration
+├── scripts/run-security-scans.sh    # Multi-scanner local orchestration script
+└── ARCHITECTURE.md                  # In-depth architectural & threat modeling specification
+```

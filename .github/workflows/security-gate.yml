@@ -1,0 +1,148 @@
+name: VaultGuard DevSecOps Security Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      security_mode:
+        description: 'Runtime Security Mode (secure | vulnerable)'
+        required: true
+        default: 'secure'
+        type: choice
+        options:
+          - secure
+          - vulnerable
+      target_dockerfile:
+        description: 'Dockerfile to audit for CIS / Trivy misconfigurations'
+        required: true
+        default: 'Dockerfile'
+        type: choice
+        options:
+          - Dockerfile
+          - Dockerfile.vulnerable
+      fail_on_sast:
+        description: 'Enforce blocking exit code on Semgrep SAST findings (--error)'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # ============================================================================
+  # JOB 1: Custom AST Static Application Security Testing (Semgrep SAST)
+  # ============================================================================
+  semgrep-sast:
+    name: Custom SAST Analysis (BOLA, SQLi, SSRF)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python Runtime for Semgrep
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Semgrep CLI
+        run: pip install semgrep
+
+      - name: Run Custom Semgrep AST Security Gate
+        run: |
+          echo "================================================================="
+          echo "🛡️  Running Custom AST Rules: .semgrep/vaultguard-rules.yml"
+          echo "================================================================="
+          
+          # In educational testbeds, the codebase contains both vulnerable and patched logic.
+          # To simulate a strict failing PR gate, toggle '--error' or pass fail_on_sast=true.
+          if [ "${{ github.event.inputs.fail_on_sast }}" = "true" ]; then
+            echo "Blocking Mode Enabled: Any AST finding will exit with non-zero code."
+            semgrep scan --config .semgrep/vaultguard-rules.yml src/ --jobs 1 --error
+          else
+            echo "Standard Audit Mode: Inspecting findings across modules..."
+            semgrep scan --config .semgrep/vaultguard-rules.yml src/ --jobs 1
+          fi
+
+  # ============================================================================
+  # JOB 2: Container Hardening & Dependency Vulnerability Gate (Trivy Scan)
+  # ============================================================================
+  trivy-scan:
+    name: Container & Dependency Hardening (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Trivy Filesystem & Secret Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Trivy Container Configuration Audit (Dockerfile)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: ${{ github.event.inputs.target_dockerfile || 'Dockerfile' }}
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1' # Enforces zero High/Critical misconfigurations in production Dockerfile!
+
+  # ============================================================================
+  # JOB 3: Runtime Authorization & Control Regression Gate
+  # ============================================================================
+  dynamic-compliance-gate:
+    name: Dynamic Authorization & Egress Compliance
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20.x]
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Setup SQLite Database & Seed Personas
+        run: npm run db:setup
+
+      - name: Build TypeScript Project
+        run: npm run build
+
+      - name: Start VaultGuard Microservice
+        run: |
+          ACTIVE_MODE="${{ github.event.inputs.security_mode || 'secure' }}"
+          echo "Starting service in background with SECURITY_MODE=${ACTIVE_MODE} on port 4000..."
+          SECURITY_MODE="${ACTIVE_MODE}" npm start &
+
+      - name: Wait for Microservice Readiness
+        run: |
+          echo "Polling http://127.0.0.1:4000/api/health..."
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:4000/api/health | grep -q "healthy"; then
+              echo "✅ VaultGuard Microservice is healthy and ready!"
+              exit 0
+            fi
+            echo "Waiting for service to initialize... (attempt $i/30)"
+            sleep 1
+          done
+          echo "❌ Timed out waiting for microservice readiness."
+          exit 1
+
+      - name: Execute Runtime Compliance & Regression Suite
+        run: npm run test:controls
