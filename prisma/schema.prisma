@@ -1,0 +1,55 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  name         String
+  role         String     @default("USER") // "USER" | "ADMIN" | "MERCHANT"
+  tenantId     String     // Multi-tenancy boundary: "tenant-alpha", "tenant-beta", etc.
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  invoices     Invoice[]
+  auditLogs    AuditLog[]
+}
+
+model Invoice {
+  id          String   @id // Deterministic identifier: "101", "103", etc.
+  amount      Float
+  currency    String   @default("USD")
+  status      String   @default("PAID")
+  description String
+  taxId       String   // High-sensitivity financial attribute for BOLA leak detection
+  ownerId     String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  action       String   // e.g., "INVOICE_ACCESS", "INVOICE_SEARCH", "SSRF_PROBE"
+  actorId      String?
+  resourceId   String?
+  securityMode String   // "vulnerable" | "secure"
+  status       String   // "ALLOWED" | "DENIED"
+  details      String?
+  ipAddress    String?
+  timestamp    DateTime @default(now())
+
+  actor        User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([securityMode])
+}
